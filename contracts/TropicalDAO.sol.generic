@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "./TropicalShares.sol";
+
+contract TropicalDAO {
+    
+    
+    TropicalShares public token;
+    uint nextProposalId;
+    uint256 public quorumPercentage = 51;
+
+    enum ProposalStatus { Pending, Active, Defeated, Succeeded, Executed }
+
+    struct Proposal {
+        uint256 id;
+        string description;
+        address targetContract;
+        bytes callData;
+        uint256 startTime;
+        uint256 endTime;
+        uint256 votesFor;
+        uint256 votesAgainst;
+        bool executed;
+        ProposalStatus status;
+    }
+
+    Proposal[] public proposals;
+
+    event VoteCasted(address indexed voter, uint256 indexed proposalId, bool voteFor, uint256 voteWeight);
+    event ProposalExecuted(uint256 indexed proposalId);
+
+
+    constructor(TropicalShares _token) {
+        token = _token;
+    }
+
+    function createProposal(
+    address targetContract,
+    bytes memory callData,
+    string memory description,
+    uint256 votingDurationInHours
+) public returns (uint256 proposalId) {
+    proposalId = nextProposalId++;
+    uint256 startTime = block.timestamp;
+    uint256 endTime = startTime + (votingDurationInHours * 1 minutes);
+
+    proposals.push(Proposal({
+        id: proposalId,
+        description: description,
+        targetContract: targetContract,
+        callData: callData,
+        startTime: startTime,
+        endTime: endTime,
+        votesFor: 0,
+        votesAgainst: 0,
+        executed: false,
+        status: ProposalStatus.Pending 
+    }));
+
+    // Fonction pour voter
+    // ...
+
+    // Fonction pour exécuter une proposition approuvée
+    // ...
+
+    // Autres fonctions auxiliaires
+    // ...
+    }
+   function listProposals() public view returns (Proposal[] memory) {
+    Proposal[] memory proposalsList = new Proposal[](proposals.length);
+    for (uint i = 0; i < proposals.length; i++) {
+        Proposal storage storedProposal = proposals[i];
+        ProposalStatus currentStatus = getProposalStatus(storedProposal);
+
+        // Créez une nouvelle instance temporaire de la proposition pour inclure le statut actuel
+        Proposal memory tempProposal = Proposal({
+            id: storedProposal.id,
+            description: storedProposal.description,
+            targetContract: storedProposal.targetContract,
+            callData: storedProposal.callData,
+            startTime: storedProposal.startTime,
+            endTime: storedProposal.endTime,
+            votesFor: storedProposal.votesFor,
+            votesAgainst: storedProposal.votesAgainst,
+            executed: storedProposal.executed,
+            status: currentStatus // Utilisez le statut actuel
+        });
+
+        proposalsList[i] = tempProposal;
+    }
+    return proposalsList;
+}
+
+
+function getProposalStatus(Proposal storage proposal) internal view returns (ProposalStatus) {
+    if (!proposal.executed) {
+        if (block.timestamp < proposal.startTime) {
+            return ProposalStatus.Pending;
+        } else if (block.timestamp <= proposal.endTime) {
+            return ProposalStatus.Active;
+        } else if (proposal.votesFor <= proposal.votesAgainst) {
+            return ProposalStatus.Defeated;
+        } else {
+            return ProposalStatus.Succeeded;
+        }
+    }
+    return ProposalStatus.Executed;
+}
+
+    function voteOnProposal(uint256 proposalId, bool voteFor) public {
+        require(proposalId < nextProposalId, "Proposal does not exist");
+        Proposal storage proposal = proposals[proposalId];
+
+        require(block.timestamp >= proposal.startTime && block.timestamp <= proposal.endTime, "Voting period is not active");
+
+        uint256 voterBalance = token.balanceOf(msg.sender);
+        require(voterBalance > 0, "No voting rights");
+
+        // Vous pouvez ajouter une logique pour s'assurer que chaque adresse vote une seule fois par proposition
+
+        if (voteFor) {
+            proposal.votesFor += voterBalance;
+        } else {
+            proposal.votesAgainst += voterBalance;
+        }
+
+        // Enregistrer le vote de l'utilisateur pour éviter les votes multiples
+        // ...
+
+        emit VoteCasted(msg.sender, proposalId, voteFor, voterBalance);
+    }
+    function executeProposal(uint256 proposalId) public {
+    require(proposalId < nextProposalId, "Proposal does not exist");
+    Proposal storage proposal = proposals[proposalId];
+
+    require(block.timestamp > proposal.endTime, "Voting period not yet ended");
+    require(!proposal.executed, "Proposal already executed");
+
+    // Vérifiez si la proposition a été approuvée
+    // Par exemple, la proposition est approuvée si votesFor est supérieur à votesAgainst et le quorum est atteint
+    require(proposal.votesFor > proposal.votesAgainst, "Proposal not approved");
+    require(proposal.votesFor + proposal.votesAgainst >= calculateQuorum(), "Quorum not reached");
+
+    // Exécution de l'action de la proposition
+    (bool success, bytes memory returnData) = proposal.targetContract.call(proposal.callData);
+
+    if (!success) {
+        // Si l'appel a échoué, remonter l'erreur
+        if (returnData.length > 0) {
+            // Le retour d'erreur est sous la forme d'un string ABI-encoded
+            revert(_getRevertMsg(returnData));
+        } else {
+            revert("Proposal execution failed without error message");
+        }
+    }
+    proposal.executed = true;
+    emit ProposalExecuted(proposalId);
+    }
+    
+    
+    function calculateQuorum() internal view returns (uint256) {
+    uint256 totalSupply = token.totalSupply();
+    return (totalSupply * quorumPercentage) / 100;
+    }
+
+    function _getRevertMsg(bytes memory returnData) internal pure returns (string memory) {
+    // Vérifier si les données de retour contiennent un message d'erreur
+    if (returnData.length < 68) return 'Transaction reverted silently';
+
+    // Tronquer le sélecteur de fonction (4 premiers octets) et garder le message d'erreur
+    assembly {
+        returnData := add(returnData, 0x04)
+    }
+    return abi.decode(returnData, (string)); // Décodage du message d'erreur
+}
+
+function createChangeOwnerProposal(address contractAddress, address newOwner, string memory description, uint endTimeStamp) public {
+    // Encode la fonction transferOwnership avec l'adresse du nouveau propriétaire
+    bytes memory callData = abi.encodeWithSignature("transferOwnership(address)", newOwner);
+
+    // Créez une nouvelle proposition dans le DAO avec le calldata
+    createProposal(contractAddress, callData, description, endTimeStamp);
+}
+
+function createBurnPappleProposal(
+    address contractAddress,  // Adresse du contrat sur lequel exécuter burnPapple
+    uint256 amountToBurn,
+    string memory description,
+    uint256 endTimeStamp
+) public {
+    // Vérifie que l'adresse du contrat fournie est valide
+    require(contractAddress != address(0), "Invalid contract address");
+
+    // Encode la fonction burnPapple avec le montant à brûler
+    bytes memory callData = abi.encodeWithSignature("burnPapple(uint256)", amountToBurn);
+
+    // Créez une nouvelle proposition dans le DAO avec le calldata
+    createProposal(contractAddress, callData, description, endTimeStamp);
+}
+
+
+
+
+}   
