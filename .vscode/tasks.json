@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "hardhat",
+			"task": "compile",
+			"group": "build",
+			"problemMatcher": [],
+			"label": "hardhat: compile",
+			"detail": "Compile hardhat project"
+		}
+	]
+}
